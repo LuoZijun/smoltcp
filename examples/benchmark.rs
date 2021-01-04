@@ -1,10 +1,4 @@
-#[cfg(feature = "log")]
-#[macro_use]
-extern crate log;
-#[cfg(feature = "log")]
-extern crate env_logger;
-extern crate getopts;
-extern crate smoltcp;
+#![allow(clippy::collapsible_if)]
 
 mod utils;
 
@@ -15,6 +9,8 @@ use std::thread;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::io::AsRawFd;
+use log::debug;
+
 use smoltcp::phy::wait as phy_wait;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr};
 use smoltcp::iface::{NeighborCache, EthernetInterfaceBuilder};

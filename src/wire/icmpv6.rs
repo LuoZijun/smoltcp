@@ -1,13 +1,13 @@
 use core::{cmp, fmt};
 use byteorder::{ByteOrder, NetworkEndian};
 
-use {Error, Result};
-use phy::ChecksumCapabilities;
-use super::ip::checksum;
-use super::{IpAddress, IpProtocol, Ipv6Packet, Ipv6Repr};
-use super::MldRepr;
+use crate::{Error, Result};
+use crate::phy::ChecksumCapabilities;
+use crate::wire::ip::checksum;
+use crate::wire::{IpAddress, IpProtocol, Ipv6Packet, Ipv6Repr};
+use crate::wire::MldRepr;
 #[cfg(feature = "ethernet")]
-use super::NdiscRepr;
+use crate::wire::NdiscRepr;
 
 enum_with_unknown! {
     /// Internet protocol control message type.
@@ -77,21 +77,21 @@ impl Message {
 
 impl fmt::Display for Message {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &Message::DstUnreachable  => write!(f, "destination unreachable"),
-            &Message::PktTooBig       => write!(f, "packet too big"),
-            &Message::TimeExceeded    => write!(f, "time exceeded"),
-            &Message::ParamProblem    => write!(f, "parameter problem"),
-            &Message::EchoReply       => write!(f, "echo reply"),
-            &Message::EchoRequest     => write!(f, "echo request"),
-            &Message::RouterSolicit   => write!(f, "router solicitation"),
-            &Message::RouterAdvert    => write!(f, "router advertisement"),
-            &Message::NeighborSolicit => write!(f, "neighbor solicitation"),
-            &Message::NeighborAdvert  => write!(f, "neighbor advert"),
-            &Message::Redirect        => write!(f, "redirect"),
-            &Message::MldQuery        => write!(f, "multicast listener query"),
-            &Message::MldReport       => write!(f, "multicast listener report"),
-            &Message::Unknown(id)     => write!(f, "{}", id)
+        match *self {
+            Message::DstUnreachable  => write!(f, "destination unreachable"),
+            Message::PktTooBig       => write!(f, "packet too big"),
+            Message::TimeExceeded    => write!(f, "time exceeded"),
+            Message::ParamProblem    => write!(f, "parameter problem"),
+            Message::EchoReply       => write!(f, "echo reply"),
+            Message::EchoRequest     => write!(f, "echo request"),
+            Message::RouterSolicit   => write!(f, "router solicitation"),
+            Message::RouterAdvert    => write!(f, "router advertisement"),
+            Message::NeighborSolicit => write!(f, "neighbor solicitation"),
+            Message::NeighborAdvert  => write!(f, "neighbor advert"),
+            Message::Redirect        => write!(f, "redirect"),
+            Message::MldQuery        => write!(f, "multicast listener query"),
+            Message::MldReport       => write!(f, "multicast listener report"),
+            Message::Unknown(id)     => write!(f, "{}", id)
         }
     }
 }
@@ -118,22 +118,22 @@ enum_with_unknown! {
 
 impl fmt::Display for DstUnreachable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &DstUnreachable::NoRoute =>
-                write!(f, "no route to destination"),
-            &DstUnreachable::AdminProhibit =>
-                write!(f, "communication with destination administratively prohibited"),
-            &DstUnreachable::BeyondScope =>
-                write!(f, "beyond scope of source address"),
-            &DstUnreachable::AddrUnreachable =>
-                write!(f, "address unreachable"),
-            &DstUnreachable::PortUnreachable =>
-                write!(f, "port unreachable"),
-            &DstUnreachable::FailedPolicy =>
-                write!(f, "source address failed ingress/egress policy"),
-            &DstUnreachable::RejectRoute =>
-                write!(f, "reject route to destination"),
-            &DstUnreachable::Unknown(id) =>
+        match *self {
+            DstUnreachable::NoRoute =>
+               write!(f, "no route to destination"),
+            DstUnreachable::AdminProhibit =>
+               write!(f, "communication with destination administratively prohibited"),
+            DstUnreachable::BeyondScope =>
+               write!(f, "beyond scope of source address"),
+            DstUnreachable::AddrUnreachable =>
+               write!(f, "address unreachable"),
+            DstUnreachable::PortUnreachable =>
+               write!(f, "port unreachable"),
+            DstUnreachable::FailedPolicy =>
+               write!(f, "source address failed ingress/egress policy"),
+            DstUnreachable::RejectRoute =>
+               write!(f, "reject route to destination"),
+            DstUnreachable::Unknown(id) =>
                 write!(f, "{}", id)
         }
     }
@@ -153,14 +153,14 @@ enum_with_unknown! {
 
 impl fmt::Display for ParamProblem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &ParamProblem::ErroneousHdrField  =>
-                write!(f, "erroneous header field."),
-            &ParamProblem::UnrecognizedNxtHdr =>
-                write!(f, "unrecognized next header type."),
-            &ParamProblem::UnrecognizedOption =>
-                write!(f, "unrecognized IPv6 option."),
-            &ParamProblem::Unknown(id) =>
+        match *self {
+            ParamProblem::ErroneousHdrField  =>
+               write!(f, "erroneous header field."),
+            ParamProblem::UnrecognizedNxtHdr =>
+               write!(f, "unrecognized next header type."),
+            ParamProblem::UnrecognizedOption =>
+               write!(f, "unrecognized IPv6 option."),
+            ParamProblem::Unknown(id) =>
                 write!(f, "{}", id)
         }
     }
@@ -178,12 +178,12 @@ enum_with_unknown! {
 
 impl fmt::Display for TimeExceeded {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &TimeExceeded::HopLimitExceeded =>
-                write!(f, "hop limit exceeded in transit"),
-            &TimeExceeded::FragReassemExceeded =>
-                write!(f, "fragment reassembly time exceeded"),
-            &TimeExceeded::Unknown(id) =>
+        match *self {
+            TimeExceeded::HopLimitExceeded =>
+               write!(f, "hop limit exceeded in transit"),
+            TimeExceeded::FragReassemExceeded =>
+               write!(f, "fragment reassembly time exceeded"),
+            TimeExceeded::Unknown(id) =>
                 write!(f, "{}", id)
         }
     }
@@ -197,7 +197,7 @@ pub struct Packet<T: AsRef<[u8]>> {
 
 // Ranges and constants describing key boundaries in the ICMPv6 header.
 pub(super) mod field {
-    use wire::field::*;
+    use crate::wire::field::*;
 
     // ICMPv6: See https://tools.ietf.org/html/rfc4443
     pub const TYPE:              usize = 0;
@@ -271,14 +271,10 @@ impl<T: AsRef<[u8]>> Packet<T> {
     /// Returns `Err(Error::Truncated)` if the buffer is too short.
     pub fn check_len(&self) -> Result<()> {
         let len = self.buffer.as_ref().len();
-        if len < field::HEADER_END {
+        if len < field::HEADER_END || len < self.header_len() {
             Err(Error::Truncated)
         } else {
-            if len < self.header_len() {
-                Err(Error::Truncated)
-            } else {
-                Ok(())
-            }
+            Ok(())
         }
     }
 
@@ -420,7 +416,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Packet<T> {
             Message::MldQuery => {
                 let data = self.buffer.as_mut();
                 NetworkEndian::write_u16(&mut data[field::QUERY_RESV], 0);
-                data[field::SQRV] = data[field::SQRV] & 0xf;
+                data[field::SQRV] &= 0xf;
             },
             Message::MldReport => {
                 let data = self.buffer.as_mut();
@@ -624,10 +620,10 @@ impl<'a> Repr<'a> {
             },
             #[cfg(feature = "ethernet")]
             (msg_type, 0) if msg_type.is_ndisc() => {
-                NdiscRepr::parse(packet).map(|repr| Repr::Ndisc(repr))
+                NdiscRepr::parse(packet).map(Repr::Ndisc)
             },
             (msg_type, 0) if msg_type.is_mld() => {
-                MldRepr::parse(packet).map(|repr| Repr::Mld(repr))
+                MldRepr::parse(packet).map(Repr::Mld)
             },
             _ => Err(Error::Unrecognized)
         }
@@ -667,15 +663,15 @@ impl<'a> Repr<'a> {
             payload.copy_from_slice(&data[..]);
         }
 
-        match self {
-            &Repr::DstUnreachable { reason, header, data } => {
+        match *self {
+            Repr::DstUnreachable { reason, header, data } => {
                 packet.set_msg_type(Message::DstUnreachable);
                 packet.set_msg_code(reason.into());
 
                 emit_contained_packet(packet.payload_mut(), header, &data);
             },
 
-            &Repr::PktTooBig { mtu, header, data } => {
+            Repr::PktTooBig { mtu, header, data } => {
                 packet.set_msg_type(Message::PktTooBig);
                 packet.set_msg_code(0);
                 packet.set_pkt_too_big_mtu(mtu);
@@ -683,14 +679,14 @@ impl<'a> Repr<'a> {
                 emit_contained_packet(packet.payload_mut(), header, &data);
             },
 
-            &Repr::TimeExceeded { reason, header, data } => {
+            Repr::TimeExceeded { reason, header, data } => {
                 packet.set_msg_type(Message::TimeExceeded);
                 packet.set_msg_code(reason.into());
 
                 emit_contained_packet(packet.payload_mut(), header, &data);
             },
 
-            &Repr::ParamProblem { reason, pointer, header, data } => {
+            Repr::ParamProblem { reason, pointer, header, data } => {
                 packet.set_msg_type(Message::ParamProblem);
                 packet.set_msg_code(reason.into());
                 packet.set_param_problem_ptr(pointer);
@@ -698,7 +694,7 @@ impl<'a> Repr<'a> {
                 emit_contained_packet(packet.payload_mut(), header, &data);
             },
 
-            &Repr::EchoRequest { ident, seq_no, data } => {
+            Repr::EchoRequest { ident, seq_no, data } => {
                 packet.set_msg_type(Message::EchoRequest);
                 packet.set_msg_code(0);
                 packet.set_echo_ident(ident);
@@ -707,7 +703,7 @@ impl<'a> Repr<'a> {
                 packet.payload_mut()[..data_len].copy_from_slice(&data[..data_len])
             },
 
-            &Repr::EchoReply { ident, seq_no, data } => {
+            Repr::EchoReply { ident, seq_no, data } => {
                 packet.set_msg_type(Message::EchoReply);
                 packet.set_msg_code(0);
                 packet.set_echo_ident(ident);
@@ -717,15 +713,15 @@ impl<'a> Repr<'a> {
             },
 
             #[cfg(feature = "ethernet")]
-            &Repr::Ndisc(ndisc) => {
+            Repr::Ndisc(ndisc) => {
                 ndisc.emit(packet)
             },
 
-            &Repr::Mld(mld) => {
+            Repr::Mld(mld) => {
                 mld.emit(packet)
             },
 
-            &Repr::__Nonexhaustive => unreachable!(),
+            Repr::__Nonexhaustive => unreachable!(),
         }
 
         if checksum_caps.icmpv6.tx() {
@@ -739,8 +735,8 @@ impl<'a> Repr<'a> {
 
 #[cfg(test)]
 mod test {
-    use wire::{Ipv6Address, Ipv6Repr, IpProtocol};
-    use wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2};
+    use crate::wire::{Ipv6Address, Ipv6Repr, IpProtocol};
+    use crate::wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2};
     use super::*;
 
     static ECHO_PACKET_BYTES: [u8; 12] =

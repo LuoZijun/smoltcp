@@ -1,6 +1,7 @@
 [package]
 name = "smoltcp"
 version = "0.6.0"
+edition = "2018"
 authors = ["whitequark <whitequark@whitequark.org>"]
 description = "A TCP/IP stack designed for bare-metal, real-time systems without a heap."
 documentation = "https://docs.rs/smoltcp/"
@@ -42,12 +43,14 @@ ethernet = []
 "socket-udp" = []
 "socket-tcp" = []
 "socket-icmp" = []
+"async" = []
 default = [
   "std", "log", # needed for `cargo test --no-default-features --features default` :/
   "ethernet",
   "phy-raw_socket", "phy-tap_interface",
-  "proto-ipv4", "proto-igmp", "proto-ipv6",
-  "socket-raw", "socket-icmp", "socket-udp", "socket-tcp"
+  "proto-ipv4", "proto-igmp", "proto-dhcpv4", "proto-ipv6",
+  "socket-raw", "socket-icmp", "socket-udp", "socket-tcp",
+  "async"
 ]
 
 # experimental; do not use; no guarantees provided that this feature will be kept

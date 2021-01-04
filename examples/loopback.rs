@@ -1,21 +1,14 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #![allow(unused_mut)]
-
-#[cfg(feature = "std")]
-use std as core;
-#[macro_use]
-extern crate log;
-extern crate smoltcp;
-#[cfg(feature = "std")]
-extern crate env_logger;
-#[cfg(feature = "std")]
-extern crate getopts;
+#![allow(clippy::collapsible_if)]
 
 #[cfg(feature = "std")]
 #[allow(dead_code)]
 mod utils;
 
 use core::str;
+use log::{info, debug, error};
+
 use smoltcp::phy::Loopback;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr};
 use smoltcp::iface::{NeighborCache, EthernetInterfaceBuilder};

@@ -1,9 +1,3 @@
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-extern crate getopts;
-extern crate smoltcp;
-
 mod utils;
 
 use std::collections::BTreeMap;
@@ -101,6 +95,6 @@ fn main() {
         iface.poll_delay(&sockets, timestamp)
             .map(|sockets_timeout| timeout = sockets_timeout);
         phy_wait(fd, Some(timeout))
-            .unwrap_or_else(|e| println!("Wait: {:?}", e));;
+            .unwrap_or_else(|e| println!("Wait: {:?}", e));
     }
 }

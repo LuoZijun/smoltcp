@@ -1,14 +1,19 @@
 use core::cmp::min;
+#[cfg(feature = "async")]
+use core::task::Waker;
 
-use {Error, Result};
-use phy::ChecksumCapabilities;
-use socket::{Socket, SocketMeta, SocketHandle, PollAt};
-use storage::{PacketBuffer, PacketMetadata};
-use wire::{IpVersion, IpRepr, IpProtocol};
+use crate::{Error, Result};
+use crate::phy::ChecksumCapabilities;
+use crate::socket::{Socket, SocketMeta, SocketHandle, PollAt};
+use crate::storage::{PacketBuffer, PacketMetadata};
+#[cfg(feature = "async")]
+use crate::socket::WakerRegistration;
+
+use crate::wire::{IpVersion, IpRepr, IpProtocol};
 #[cfg(feature = "proto-ipv4")]
-use wire::{Ipv4Repr, Ipv4Packet};
+use crate::wire::{Ipv4Repr, Ipv4Packet};
 #[cfg(feature = "proto-ipv6")]
-use wire::{Ipv6Repr, Ipv6Packet};
+use crate::wire::{Ipv6Repr, Ipv6Packet};
 
 /// A UDP packet metadata.
 pub type RawPacketMetadata = PacketMetadata<()>;
@@ -27,6 +32,10 @@ pub struct RawSocket<'a, 'b: 'a> {
     ip_protocol: IpProtocol,
     rx_buffer:   RawSocketBuffer<'a, 'b>,
     tx_buffer:   RawSocketBuffer<'a, 'b>,
+    #[cfg(feature = "async")]
+    rx_waker: WakerRegistration,
+    #[cfg(feature = "async")]
+    tx_waker: WakerRegistration,
 }
 
 impl<'a, 'b> RawSocket<'a, 'b> {
@@ -41,7 +50,46 @@ impl<'a, 'b> RawSocket<'a, 'b> {
             ip_protocol,
             rx_buffer,
             tx_buffer,
+            #[cfg(feature = "async")]
+            rx_waker: WakerRegistration::new(),
+            #[cfg(feature = "async")]
+            tx_waker: WakerRegistration::new(),
         }
+    }
+
+    /// Register a waker for receive operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `recv` method calls, such as receiving data, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `recv` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_recv_waker(&mut self, waker: &Waker) {
+        self.rx_waker.register(waker)
+    }
+
+    /// Register a waker for send operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `send` method calls, such as space becoming available in the transmit
+    /// buffer, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `send` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_send_waker(&mut self, waker: &Waker) {
+        self.tx_waker.register(waker)
     }
 
     /// Return the socket handle.
@@ -115,7 +163,7 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         net_trace!("{}:{}:{}: buffer to send {} octets",
                    self.meta.handle, self.ip_version, self.ip_protocol,
                    packet_buf.len());
-        Ok(packet_buf.as_mut())
+        Ok(packet_buf)
     }
 
     /// Enqueue a packet to send, and fill it from a slice.
@@ -165,12 +213,16 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         let header_len = ip_repr.buffer_len();
         let total_len  = header_len + payload.len();
         let packet_buf = self.rx_buffer.enqueue(total_len, ())?;
-        ip_repr.emit(&mut packet_buf.as_mut()[..header_len], &checksum_caps);
-        packet_buf.as_mut()[header_len..].copy_from_slice(payload);
+        ip_repr.emit(&mut packet_buf[..header_len], &checksum_caps);
+        packet_buf[header_len..].copy_from_slice(payload);
 
         net_trace!("{}:{}:{}: receiving {} octets",
                    self.meta.handle, self.ip_version, self.ip_protocol,
                    packet_buf.len());
+
+        #[cfg(feature = "async")]
+        self.rx_waker.wake();
+
         Ok(())
     }
 
@@ -179,10 +231,10 @@ impl<'a, 'b> RawSocket<'a, 'b> {
             where F: FnOnce((IpRepr, &[u8])) -> Result<()> {
         fn prepare<'a>(protocol: IpProtocol, buffer: &'a mut [u8],
                    _checksum_caps: &ChecksumCapabilities) -> Result<(IpRepr, &'a [u8])> {
-            match IpVersion::of_packet(buffer.as_ref())? {
+            match IpVersion::of_packet(buffer)? {
                 #[cfg(feature = "proto-ipv4")]
                 IpVersion::Ipv4 => {
-                    let mut packet = Ipv4Packet::new_checked(buffer.as_mut())?;
+                    let mut packet = Ipv4Packet::new_checked(buffer)?;
                     if packet.protocol() != protocol { return Err(Error::Unaddressable) }
                     if _checksum_caps.ipv4.tx() {
                         packet.fill_checksum();
@@ -198,7 +250,7 @@ impl<'a, 'b> RawSocket<'a, 'b> {
                 }
                 #[cfg(feature = "proto-ipv6")]
                 IpVersion::Ipv6 => {
-                    let packet = Ipv6Packet::new_checked(buffer.as_mut())?;
+                    let packet = Ipv6Packet::new_checked(buffer)?;
                     if packet.next_header() != protocol { return Err(Error::Unaddressable) }
                     let packet = Ipv6Packet::new_unchecked(&*packet.into_inner());
                     let ipv6_repr = Ipv6Repr::parse(&packet)?;
@@ -213,7 +265,7 @@ impl<'a, 'b> RawSocket<'a, 'b> {
         let ip_protocol = self.ip_protocol;
         let ip_version  = self.ip_version;
         self.tx_buffer.dequeue_with(|&mut (), packet_buf| {
-            match prepare(ip_protocol, packet_buf.as_mut(), &checksum_caps) {
+            match prepare(ip_protocol, packet_buf, &checksum_caps) {
                 Ok((ip_repr, raw_packet)) => {
                     net_trace!("{}:{}:{}: sending {} octets",
                                handle, ip_version, ip_protocol,
@@ -228,7 +280,12 @@ impl<'a, 'b> RawSocket<'a, 'b> {
                     Ok(())
                 }
             }
-        })
+        })?;
+
+        #[cfg(feature = "async")]
+        self.tx_waker.wake();
+
+        Ok(())
     }
 
     pub(crate) fn poll_at(&self) -> PollAt {
@@ -248,11 +305,11 @@ impl<'a, 'b> Into<Socket<'a, 'b>> for RawSocket<'a, 'b> {
 
 #[cfg(test)]
 mod test {
-    use wire::IpRepr;
+    use crate::wire::IpRepr;
     #[cfg(feature = "proto-ipv4")]
-    use wire::{Ipv4Address, Ipv4Repr};
+    use crate::wire::{Ipv4Address, Ipv4Repr};
     #[cfg(feature = "proto-ipv6")]
-    use wire::{Ipv6Address, Ipv6Repr};
+    use crate::wire::{Ipv6Address, Ipv6Repr};
     use super::*;
 
     fn buffer(packets: usize) -> RawSocketBuffer<'static, 'static> {

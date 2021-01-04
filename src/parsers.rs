@@ -4,12 +4,12 @@ use core::str::FromStr;
 use core::result;
 
 #[cfg(feature = "ethernet")]
-use wire::EthernetAddress;
-use wire::{IpAddress, IpCidr, IpEndpoint};
+use crate::wire::EthernetAddress;
+use crate::wire::{IpAddress, IpCidr, IpEndpoint};
 #[cfg(feature = "proto-ipv4")]
-use wire::{Ipv4Address, Ipv4Cidr};
+use crate::wire::{Ipv4Address, Ipv4Cidr};
 #[cfg(feature = "proto-ipv6")]
-use wire::{Ipv6Address, Ipv6Cidr};
+use crate::wire::{Ipv6Address, Ipv6Cidr};
 
 type Result<T> = result::Result<T, ()>;
 
@@ -44,7 +44,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn try<F, T>(&mut self, f: F) -> Option<T>
+    fn try_do<F, T>(&mut self, f: F) -> Option<T>
             where F: FnOnce(&mut Parser<'a>) -> Result<T> {
         let pos = self.pos;
         match f(self) {
@@ -88,11 +88,11 @@ impl<'a> Parser<'a> {
 
     fn accept_digit(&mut self, hex: bool) -> Result<u8> {
         let digit = self.advance()?;
-        if digit >= b'0' && digit <= b'9' {
+        if (b'0'..=b'9').contains(&digit) {
             Ok(digit - b'0')
-        } else if hex && digit >= b'a' && digit <= b'f' {
+        } else if hex && (b'a'..=b'f').contains(&digit) {
             Ok(digit - b'a' + 10)
-        } else if hex && digit >= b'A' && digit <= b'F' {
+        } else if hex && (b'A'..=b'F').contains(&digit) {
             Ok(digit - b'A' + 10)
         } else {
             Err(())
@@ -103,7 +103,7 @@ impl<'a> Parser<'a> {
                      hex: bool) -> Result<u32> {
         let mut value = self.accept_digit(hex)? as u32;
         for _ in 1..max_digits {
-            match self.try(|p| p.accept_digit(hex)) {
+            match self.try_do(|p| p.accept_digit(hex)) {
                 Some(digit) => {
                     value *= if hex { 16 } else { 10 };
                     value += digit as u32;
@@ -121,8 +121,8 @@ impl<'a> Parser<'a> {
     #[cfg(feature = "ethernet")]
     fn accept_mac_joined_with(&mut self, separator: u8) -> Result<EthernetAddress> {
         let mut octets = [0u8; 6];
-        for n in 0..6 {
-            octets[n] = self.accept_number(2, 0x100, true)? as u8;
+        for (n, octet) in octets.iter_mut().enumerate() {
+            *octet = self.accept_number(2, 0x100, true)? as u8;
             if n != 5 {
                 self.accept_char(separator)?;
             }
@@ -132,10 +132,10 @@ impl<'a> Parser<'a> {
 
     #[cfg(feature = "ethernet")]
     fn accept_mac(&mut self) -> Result<EthernetAddress> {
-        if let Some(mac) = self.try(|p| p.accept_mac_joined_with(b'-')) {
+        if let Some(mac) = self.try_do(|p| p.accept_mac_joined_with(b'-')) {
             return Ok(mac)
         }
-        if let Some(mac) = self.try(|p| p.accept_mac_joined_with(b':')) {
+        if let Some(mac) = self.try_do(|p| p.accept_mac_joined_with(b':')) {
             return Ok(mac)
         }
         Err(())
@@ -157,7 +157,7 @@ impl<'a> Parser<'a> {
     fn accept_ipv6_part(&mut self, (head, tail): (&mut [u16; 8], &mut [u16; 6]),
                         (head_idx, tail_idx): (&mut usize, &mut usize),
                         mut use_tail: bool, is_cidr: bool) -> Result<()> {
-        let double_colon = match self.try(|p| p.accept_str(b"::")) {
+        let double_colon = match self.try_do(|p| p.accept_str(b"::")) {
             Some(_) if !use_tail && *head_idx < 7 => {
                 // Found a double colon. Start filling out the
                 // tail and set the double colon flag in case
@@ -180,14 +180,14 @@ impl<'a> Parser<'a> {
             }
         };
 
-        match self.try(|p| p.accept_number(4, 0x10000, true)) {
+        match self.try_do(|p| p.accept_number(4, 0x10000, true)) {
             Some(part) if !use_tail && *head_idx < 8 => {
                 // Valid u16 to be added to the address
                 head[*head_idx] = part as u16;
                 *head_idx += 1;
 
                 if *head_idx == 6 && head[0..*head_idx] == [0, 0, 0, 0, 0, 0xffff] {
-                    self.try(|p| {
+                    self.try_do(|p| {
                         p.accept_char(b':')?;
                         p.accept_ipv4_mapped_ipv6_part(head, head_idx)
                     });
@@ -201,7 +201,7 @@ impl<'a> Parser<'a> {
 
                 if *tail_idx == 1 && tail[0] == 0xffff
                         && head[0..8] == [0, 0, 0, 0, 0, 0, 0, 0] {
-                    self.try(|p| {
+                    self.try_do(|p| {
                         p.accept_char(b':')?;
                         p.accept_ipv4_mapped_ipv6_part(tail, tail_idx)
                     });
@@ -270,8 +270,8 @@ impl<'a> Parser<'a> {
 
     fn accept_ipv4_octets(&mut self) -> Result<[u8; 4]> {
         let mut octets = [0u8; 4];
-        for n in 0..4 {
-            octets[n] = self.accept_number(3, 0x100, false)? as u8;
+        for (n, octet) in octets.iter_mut().enumerate() {
+            *octet = self.accept_number(3, 0x100, false)? as u8;
             if n != 3 {
                 self.accept_char(b'.')?;
             }
@@ -287,13 +287,15 @@ impl<'a> Parser<'a> {
 
     fn accept_ip(&mut self) -> Result<IpAddress> {
         #[cfg(feature = "proto-ipv4")]
-        match self.try(|p| p.accept_ipv4()) {
+        #[allow(clippy::single_match)]
+        match self.try_do(|p| p.accept_ipv4()) {
             Some(ipv4) => return Ok(IpAddress::Ipv4(ipv4)),
             None => ()
         }
 
         #[cfg(feature = "proto-ipv6")]
-        match self.try(|p| p.accept_ipv6(false)) {
+        #[allow(clippy::single_match)]
+        match self.try_do(|p| p.accept_ipv6(false)) {
             Some(ipv6) => return Ok(IpAddress::Ipv6(ipv6)),
             None => ()
         }
@@ -333,13 +335,15 @@ impl<'a> Parser<'a> {
 
     fn accept_ip_endpoint(&mut self) -> Result<IpEndpoint> {
         #[cfg(feature = "proto-ipv4")]
-        match self.try(|p| p.accept_ipv4_endpoint()) {
+        #[allow(clippy::single_match)]
+        match self.try_do(|p| p.accept_ipv4_endpoint()) {
             Some(ipv4) => return Ok(ipv4),
             None => ()
         }
 
         #[cfg(feature = "proto-ipv6")]
-        match self.try(|p| p.accept_ipv6_endpoint()) {
+        #[allow(clippy::single_match)]
+        match self.try_do(|p| p.accept_ipv6_endpoint()) {
             Some(ipv6) => return Ok(ipv6),
             None => ()
         }
@@ -424,12 +428,14 @@ impl FromStr for IpCidr {
     /// Parse a string representation of an IP CIDR.
     fn from_str(s: &str) -> Result<IpCidr> {
         #[cfg(feature = "proto-ipv4")]
+        #[allow(clippy::single_match)]
         match Ipv4Cidr::from_str(s) {
             Ok(cidr) => return Ok(IpCidr::Ipv4(cidr)),
             Err(_) => ()
         }
 
         #[cfg(feature = "proto-ipv6")]
+        #[allow(clippy::single_match)]
         match Ipv6Cidr::from_str(s) {
             Ok(cidr) => return Ok(IpCidr::Ipv6(cidr)),
             Err(_) => ()

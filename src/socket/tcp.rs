@@ -3,13 +3,17 @@
 // a new feature.
 
 use core::{cmp, fmt, mem};
+#[cfg(feature = "async")]
+use core::task::Waker;
 
-use {Error, Result};
-use phy::DeviceCapabilities;
-use time::{Duration, Instant};
-use socket::{Socket, SocketMeta, SocketHandle, PollAt};
-use storage::{Assembler, RingBuffer};
-use wire::{IpProtocol, IpRepr, IpAddress, IpEndpoint, TcpSeqNumber, TcpRepr, TcpControl};
+use crate::{Error, Result};
+use crate::phy::DeviceCapabilities;
+use crate::time::{Duration, Instant};
+use crate::socket::{Socket, SocketMeta, SocketHandle, PollAt};
+use crate::storage::{Assembler, RingBuffer};
+#[cfg(feature = "async")]
+use crate::socket::WakerRegistration;
+use crate::wire::{IpProtocol, IpRepr, IpAddress, IpEndpoint, TcpSeqNumber, TcpRepr, TcpControl};
 
 /// A TCP socket ring buffer.
 pub type SocketBuffer<'a> = RingBuffer<'a, u8>;
@@ -34,18 +38,18 @@ pub enum State {
 
 impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &State::Closed      => write!(f, "CLOSED"),
-            &State::Listen      => write!(f, "LISTEN"),
-            &State::SynSent     => write!(f, "SYN-SENT"),
-            &State::SynReceived => write!(f, "SYN-RECEIVED"),
-            &State::Established => write!(f, "ESTABLISHED"),
-            &State::FinWait1    => write!(f, "FIN-WAIT-1"),
-            &State::FinWait2    => write!(f, "FIN-WAIT-2"),
-            &State::CloseWait   => write!(f, "CLOSE-WAIT"),
-            &State::Closing     => write!(f, "CLOSING"),
-            &State::LastAck     => write!(f, "LAST-ACK"),
-            &State::TimeWait    => write!(f, "TIME-WAIT")
+        match *self {
+            State::Closed      => write!(f, "CLOSED"),
+            State::Listen      => write!(f, "LISTEN"),
+            State::SynSent     => write!(f, "SYN-SENT"),
+            State::SynReceived => write!(f, "SYN-RECEIVED"),
+            State::Established => write!(f, "ESTABLISHED"),
+            State::FinWait1    => write!(f, "FIN-WAIT-1"),
+            State::FinWait2    => write!(f, "FIN-WAIT-2"),
+            State::CloseWait   => write!(f, "CLOSE-WAIT"),
+            State::Closing     => write!(f, "CLOSING"),
+            State::LastAck     => write!(f, "LAST-ACK"),
+            State::TimeWait    => write!(f, "TIME-WAIT")
         }
     }
 }
@@ -123,21 +127,16 @@ impl Timer {
     }
 
     fn set_keep_alive(&mut self) {
-        match *self {
-            Timer::Idle { ref mut keep_alive_at }
-                    if keep_alive_at.is_none() => {
+        if let Timer::Idle { ref mut keep_alive_at } = *self {
+            if keep_alive_at.is_none() {
                 *keep_alive_at = Some(Instant::from_millis(0))
             }
-            _ => ()
         }
     }
 
     fn rewind_keep_alive(&mut self, timestamp: Instant, interval: Option<Duration>) {
-        match self {
-            &mut Timer::Idle { ref mut keep_alive_at } => {
-                *keep_alive_at = interval.map(|interval| timestamp + interval)
-            }
-            _ => ()
+        if let Timer::Idle { ref mut keep_alive_at } = *self {
+            *keep_alive_at = interval.map(|interval| timestamp + interval)
         }
     }
 
@@ -248,6 +247,12 @@ pub struct TcpSocket<'a> {
     /// The number of packets recived directly after
     /// each other which have the same ACK number.
     local_rx_dup_acks: u8,
+
+    #[cfg(feature = "async")]
+    rx_waker: WakerRegistration,
+    #[cfg(feature = "async")]
+    tx_waker: WakerRegistration,
+
 }
 
 const DEFAULT_MSS: usize = 536;
@@ -298,7 +303,47 @@ impl<'a> TcpSocket<'a> {
             local_rx_last_ack: None,
             local_rx_last_seq: None,
             local_rx_dup_acks: 0,
+
+            #[cfg(feature = "async")]
+            rx_waker: WakerRegistration::new(),
+            #[cfg(feature = "async")]
+            tx_waker: WakerRegistration::new(),
         }
+    }
+
+    /// Register a waker for receive operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `recv` method calls, such as receiving data, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `recv` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_recv_waker(&mut self, waker: &Waker) {
+        self.rx_waker.register(waker)
+    }
+
+    /// Register a waker for send operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `send` method calls, such as space becoming available in the transmit
+    /// buffer, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `send` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_send_waker(&mut self, waker: &Waker) {
+        self.tx_waker.register(waker)
     }
 
     /// Return the socket handle.
@@ -438,6 +483,12 @@ impl<'a> TcpSocket<'a> {
         self.remote_win_shift = rx_cap_log2.saturating_sub(16) as u8;
         self.remote_mss      = DEFAULT_MSS;
         self.remote_last_ts  = None;
+
+        #[cfg(feature = "async")]
+        {
+            self.rx_waker.wake();
+            self.tx_waker.wake();
+        }
     }
 
     /// Start listening on the given endpoint.
@@ -629,7 +680,7 @@ impl<'a> TcpSocket<'a> {
             // we still can receive indefinitely.
             State::FinWait1 | State::FinWait2 => true,
             // If we have something in the receive buffer, we can receive that.
-            _ if self.rx_buffer.len() > 0 => true,
+            _ if !self.rx_buffer.is_empty() => true,
             _ => false
         }
     }
@@ -777,7 +828,7 @@ impl<'a> TcpSocket<'a> {
         self.recv_error_check()?;
 
         let buffer = self.rx_buffer.get_allocated(0, size);
-        if buffer.len() > 0 {
+        if !buffer.is_empty() {
             #[cfg(any(test, feature = "verbose"))]
             net_trace!("{}:{}:{}: rx buffer: peeking at {} octets",
                        self.meta.handle, self.local_endpoint, self.remote_endpoint,
@@ -825,7 +876,17 @@ impl<'a> TcpSocket<'a> {
                            self.state, state);
             }
         }
-        self.state = state
+
+        self.state = state;
+
+        #[cfg(feature = "async")]
+        {
+            // Wake all tasks waiting. Even if we haven't received/sent data, this
+            // is needed because return values of functions may change depending on the state.
+            // For example, a pending read has to fail with an error if the socket is closed.
+            self.rx_waker.wake();
+            self.tx_waker.wake();
+        }
     }
 
     pub(crate) fn reply(ip_repr: &IpRepr, repr: &TcpRepr) -> (IpRepr, TcpRepr<'static>) {
@@ -900,8 +961,7 @@ impl<'a> TcpSocket<'a> {
                 reply_repr.sack_ranges[0] = self.assembler.iter_data(
                     reply_repr.ack_number.map(|s| s.0 as usize).unwrap_or(0))
                     .map(|(left, right)| (left as u32, right as u32))
-                    .skip_while(|(left, right)| *left > last_seg_seq || *right < last_seg_seq)
-                    .next();
+                    .find(|(left, right)| *left <= last_seg_seq && *right >= last_seg_seq);
             }
 
             if reply_repr.sack_ranges[0].is_none() {
@@ -1283,6 +1343,10 @@ impl<'a> TcpSocket<'a> {
                        self.meta.handle, self.local_endpoint, self.remote_endpoint,
                        ack_len, self.tx_buffer.len() - ack_len);
             self.tx_buffer.dequeue_allocated(ack_len);
+
+            // There's new room available in tx_buffer, wake the waiting task if any.
+            #[cfg(feature = "async")]
+            self.tx_waker.wake();
         }
 
         if let Some(ack_number) = repr.ack_number {
@@ -1298,7 +1362,7 @@ impl<'a> TcpSocket<'a> {
                 // Increment duplicate ACK count and set for retransmit if we just recived
                 // the third duplicate ACK
                 Some(ref last_rx_ack) if
-                    repr.payload.len() == 0 &&
+                    repr.payload.is_empty() &&
                     *last_rx_ack == ack_number &&
                     ack_number < self.remote_last_seq => {
                     // Increment duplicate ACK count
@@ -1352,7 +1416,7 @@ impl<'a> TcpSocket<'a> {
                            payload_len, payload_offset);
                 self.rx_buffer.write_unallocated(payload_offset, repr.payload);
             }
-            Err(()) => {
+            Err(_) => {
                 net_debug!("{}:{}:{}: assembler: too many holes to add {} octets at offset {}",
                            self.meta.handle, self.local_endpoint, self.remote_endpoint,
                            payload_len, payload_offset);
@@ -1367,6 +1431,10 @@ impl<'a> TcpSocket<'a> {
                        self.meta.handle, self.local_endpoint, self.remote_endpoint,
                        contig_len, self.rx_buffer.len() + contig_len);
             self.rx_buffer.enqueue_unallocated(contig_len);
+
+            // There's new data in rx_buffer, notify waiting task if any.
+            #[cfg(feature = "async")]
+            self.rx_waker.wake();
         }
 
         if !self.assembler.is_empty() {
@@ -1401,20 +1469,28 @@ impl<'a> TcpSocket<'a> {
     }
 
     fn seq_to_transmit(&self) -> bool {
-        let control;
-        match self.state {
-            State::SynSent  | State::SynReceived =>
-                control = TcpControl::Syn,
-            State::FinWait1 | State::LastAck =>
-                control = TcpControl::Fin,
-            _ => control = TcpControl::None
-        }
+        // We can send data if we have data that:
+        // - hasn't been sent before
+        // - fits in the remote window
+        let can_data = self.remote_last_seq
+            < self.local_seq_no + core::cmp::min(self.remote_win_len, self.tx_buffer.len());
 
-        self.remote_last_seq <
-            self.local_seq_no + core::cmp::min(
-                self.remote_win_len,
-                self.tx_buffer.len()
-            ) + control.len()
+        // Do we have to send a FIN?
+        let want_fin = match self.state {
+            State::FinWait1 => true,
+            State::Closing => true,
+            State::LastAck => true,
+            _ => false,
+        };
+
+        // Can we actually send the FIN? We can send it if:
+        // 1. We have unsent data that fits in the remote window.
+        // 2. We have no unsent data.
+        // This condition matches only if #2, because #1 is already covered by can_data and we're ORing them.
+        let can_fin =
+            want_fin && self.remote_last_seq == self.local_seq_no + self.tx_buffer.len();
+
+        can_data || can_fin
     }
 
     fn ack_to_transmit(&self) -> bool {
@@ -1552,9 +1628,8 @@ impl<'a> TcpSocket<'a> {
             }
 
             // We transmit data in all states where we may have data in the buffer,
-            // or the transmit half of the connection is still open:
-            // the ESTABLISHED, FIN-WAIT-1, CLOSE-WAIT and LAST-ACK states.
-            State::Established | State::FinWait1 | State::CloseWait | State::LastAck => {
+            // or the transmit half of the connection is still open.
+            State::Established | State::FinWait1 | State::Closing | State::CloseWait | State::LastAck => {
                 // Extract as much data as the remote side can receive in this packet
                 // from the transmit buffer.
                 let offset = self.remote_last_seq - self.local_seq_no;
@@ -1566,22 +1641,17 @@ impl<'a> TcpSocket<'a> {
                 // flags, depending on whether the transmit half of the connection is open.
                 if offset + repr.payload.len() == self.tx_buffer.len() {
                     match self.state {
-                        State::FinWait1 | State::LastAck =>
+                        State::FinWait1 | State::LastAck | State::Closing =>
                             repr.control = TcpControl::Fin,
-                        State::Established | State::CloseWait if repr.payload.len() > 0 =>
+                        State::Established | State::CloseWait if !repr.payload.is_empty() =>
                             repr.control = TcpControl::Psh,
                         _ => ()
                     }
                 }
             }
 
-            // We do not transmit data in the FIN-WAIT-2 state, but we may transmit
-            // ACKs for incoming data.
-            State::FinWait2 => {}
-
-            // We do not transmit data or control flags in the CLOSING or TIME-WAIT states,
-            // but we may retransmit an ACK.
-            State::Closing | State::TimeWait => ()
+            // In FIN-WAIT-2 and TIME-WAIT states we may only transmit ACKs for incoming data or FIN
+            State::FinWait2 | State::TimeWait => {}
         }
 
         // There might be more than one reason to send a packet. E.g. the keep-alive timer
@@ -1601,12 +1671,12 @@ impl<'a> TcpSocket<'a> {
         if is_keep_alive {
             net_trace!("{}:{}:{}: sending a keep-alive",
                        self.meta.handle, self.local_endpoint, self.remote_endpoint);
-        } else if repr.payload.len() > 0 {
+        } else if !repr.payload.is_empty() {
             net_trace!("{}:{}:{}: tx buffer: sending {} octets at offset {}",
                        self.meta.handle, self.local_endpoint, self.remote_endpoint,
                        repr.payload.len(), self.remote_last_seq - self.local_seq_no);
         }
-        if repr.control != TcpControl::None || repr.payload.len() == 0 {
+        if repr.control != TcpControl::None || repr.payload.is_empty() {
             let flags =
                 match (repr.control, repr.ack_number) {
                     (TcpControl::Syn,  None)    => "SYN",
@@ -1721,8 +1791,8 @@ impl<'a> fmt::Write for TcpSocket<'a> {
 mod test {
     use core::i32;
     use std::vec::Vec;
-    use wire::{IpAddress, IpRepr, IpCidr};
-    use wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3, MOCK_UNSPECIFIED};
+    use crate::wire::{IpAddress, IpRepr, IpCidr};
+    use crate::wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3, MOCK_UNSPECIFIED};
     use super::*;
 
     // =========================================================================================//
@@ -1869,8 +1939,6 @@ mod test {
 
     #[cfg(feature = "log")]
     fn init_logger() {
-        extern crate log;
-
         struct Logger;
         static LOGGER: Logger = Logger;
 
@@ -1891,7 +1959,7 @@ mod test {
         let _ = log::set_logger(&LOGGER);
         log::set_max_level(log::LevelFilter::Trace);
 
-        println!("");
+        println!();
     }
 
     fn socket() -> TcpSocket<'static> {
@@ -3408,6 +3476,74 @@ mod test {
             ack_number: Some(REMOTE_SEQ + 1 + 1),
             ..RECV_TEMPL
         }]);
+    }
+
+    #[test]
+    fn test_simultaneous_close_raced() {
+        let mut s = socket_established();
+        s.close();
+        assert_eq!(s.state, State::FinWait1);
+
+        // Socket receives FIN before it has a chance to send its own FIN
+        send!(s, TcpRepr {
+            control: TcpControl::Fin,
+            seq_number: REMOTE_SEQ + 1,
+            ack_number: Some(LOCAL_SEQ + 1),
+            ..SEND_TEMPL
+        });
+        assert_eq!(s.state, State::Closing);
+
+        // FIN + ack-of-FIN
+        recv!(s, [TcpRepr {
+            control: TcpControl::Fin,
+            seq_number: LOCAL_SEQ + 1,
+            ack_number: Some(REMOTE_SEQ + 1 + 1),
+            ..RECV_TEMPL
+        }]);
+        assert_eq!(s.state, State::Closing);
+
+        send!(s, TcpRepr {
+            seq_number: REMOTE_SEQ + 1 + 1,
+            ack_number: Some(LOCAL_SEQ + 1 + 1),
+            ..SEND_TEMPL
+        });
+        assert_eq!(s.state, State::TimeWait);
+        recv!(s, []);
+    }
+
+    #[test]
+    fn test_simultaneous_close_raced_with_data() {
+        let mut s = socket_established();
+        s.send_slice(b"abcdef").unwrap();
+        s.close();
+        assert_eq!(s.state, State::FinWait1);
+
+        // Socket receives FIN before it has a chance to send its own data+FIN
+        send!(s, TcpRepr {
+            control: TcpControl::Fin,
+            seq_number: REMOTE_SEQ + 1,
+            ack_number: Some(LOCAL_SEQ + 1),
+            ..SEND_TEMPL
+        });
+        assert_eq!(s.state, State::Closing);
+
+        // data + FIN + ack-of-FIN
+        recv!(s, [TcpRepr {
+            control: TcpControl::Fin,
+            seq_number: LOCAL_SEQ + 1,
+            ack_number: Some(REMOTE_SEQ + 1 + 1),
+            payload:    &b"abcdef"[..],
+            ..RECV_TEMPL
+        }]);
+        assert_eq!(s.state, State::Closing);
+
+        send!(s, TcpRepr {
+            seq_number: REMOTE_SEQ + 1 + 1,
+            ack_number: Some(LOCAL_SEQ + 1 + 6 + 1),
+            ..SEND_TEMPL
+        });
+        assert_eq!(s.state, State::TimeWait);
+        recv!(s, []);
     }
 
     #[test]

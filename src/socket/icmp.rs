@@ -1,17 +1,21 @@
 use core::cmp;
+#[cfg(feature = "async")]
+use core::task::Waker;
 
-use {Error, Result};
-use phy::{ChecksumCapabilities, DeviceCapabilities};
-use socket::{Socket, SocketMeta, SocketHandle, PollAt};
-use storage::{PacketBuffer, PacketMetadata};
-use wire::{IpAddress, IpEndpoint, IpProtocol, IpRepr};
+use crate::{Error, Result};
+use crate::phy::{ChecksumCapabilities, DeviceCapabilities};
+use crate::socket::{Socket, SocketMeta, SocketHandle, PollAt};
+use crate::storage::{PacketBuffer, PacketMetadata};
+#[cfg(feature = "async")]
+use crate::socket::WakerRegistration;
 
 #[cfg(feature = "proto-ipv4")]
-use wire::{Ipv4Address, Ipv4Repr, Icmpv4Packet, Icmpv4Repr};
+use crate::wire::{Ipv4Address, Ipv4Repr, Icmpv4Packet, Icmpv4Repr};
 #[cfg(feature = "proto-ipv6")]
-use wire::{Ipv6Address, Ipv6Repr, Icmpv6Packet, Icmpv6Repr};
-use wire::IcmpRepr;
-use wire::{UdpPacket, UdpRepr};
+use crate::wire::{Ipv6Address, Ipv6Repr, Icmpv6Packet, Icmpv6Repr};
+use crate::wire::IcmpRepr;
+use crate::wire::{UdpPacket, UdpRepr};
+use crate::wire::{IpAddress, IpEndpoint, IpProtocol, IpRepr};
 
 /// Type of endpoint to bind the ICMP socket to. See [IcmpSocket::bind] for
 /// more details.
@@ -61,7 +65,11 @@ pub struct IcmpSocket<'a, 'b: 'a> {
     /// The endpoint this socket is communicating with
     endpoint:  Endpoint,
     /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
-    hop_limit: Option<u8>
+    hop_limit: Option<u8>,
+    #[cfg(feature = "async")]
+    rx_waker: WakerRegistration,
+    #[cfg(feature = "async")]
+    tx_waker: WakerRegistration,
 }
 
 impl<'a, 'b> IcmpSocket<'a, 'b> {
@@ -73,8 +81,47 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
             rx_buffer: rx_buffer,
             tx_buffer: tx_buffer,
             endpoint:  Endpoint::default(),
-            hop_limit: None
+            hop_limit: None,
+            #[cfg(feature = "async")]
+            rx_waker: WakerRegistration::new(),
+            #[cfg(feature = "async")]
+            tx_waker: WakerRegistration::new(),
         }
+    }
+
+    /// Register a waker for receive operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `recv` method calls, such as receiving data, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `recv` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_recv_waker(&mut self, waker: &Waker) {
+        self.rx_waker.register(waker)
+    }
+
+    /// Register a waker for send operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `send` method calls, such as space becoming available in the transmit
+    /// buffer, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `send` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_send_waker(&mut self, waker: &Waker) {
+        self.tx_waker.register(waker)
     }
 
     /// Return the socket handle.
@@ -174,6 +221,13 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
         if self.is_open() { return Err(Error::Illegal) }
 
         self.endpoint = endpoint;
+
+        #[cfg(feature = "async")]
+        {
+            self.rx_waker.wake();
+            self.tx_waker.wake();
+        }
+
         Ok(())
     }
 
@@ -316,9 +370,9 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
 
     pub(crate) fn process(&mut self, ip_repr: &IpRepr, icmp_repr: &IcmpRepr,
                           _cksum: &ChecksumCapabilities) -> Result<()> {
-        match icmp_repr {
+        match *icmp_repr {
             #[cfg(feature = "proto-ipv4")]
-            &IcmpRepr::Ipv4(ref icmp_repr) => {
+            IcmpRepr::Ipv4(ref icmp_repr) => {
                 let packet_buf = self.rx_buffer.enqueue(icmp_repr.buffer_len(),
                                                         ip_repr.src_addr())?;
                 icmp_repr.emit(&mut Icmpv4Packet::new_unchecked(packet_buf),
@@ -328,7 +382,7 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
                            self.meta.handle, icmp_repr.buffer_len(), packet_buf.len());
             },
             #[cfg(feature = "proto-ipv6")]
-            &IcmpRepr::Ipv6(ref icmp_repr) => {
+            IcmpRepr::Ipv6(ref icmp_repr) => {
                 let packet_buf = self.rx_buffer.enqueue(icmp_repr.buffer_len(),
                                                         ip_repr.src_addr())?;
                 icmp_repr.emit(&ip_repr.src_addr(), &ip_repr.dst_addr(),
@@ -339,6 +393,10 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
                            self.meta.handle, icmp_repr.buffer_len(), packet_buf.len());
             },
         }
+
+        #[cfg(feature = "async")]
+        self.rx_waker.wake();
+
         Ok(())
     }
 
@@ -380,7 +438,12 @@ impl<'a, 'b> IcmpSocket<'a, 'b> {
                 },
                 _ => Err(Error::Unaddressable)
             }
-        })
+        })?;
+        
+        #[cfg(feature = "async")]
+        self.tx_waker.wake();
+
+        Ok(())
     }
 
     pub(crate) fn poll_at(&self) -> PollAt {
@@ -400,8 +463,8 @@ impl<'a, 'b> Into<Socket<'a, 'b>> for IcmpSocket<'a, 'b> {
 
 #[cfg(test)]
 mod tests_common {
-    pub use phy::DeviceCapabilities;
-    pub use wire::IpAddress;
+    pub use crate::phy::DeviceCapabilities;
+    pub use crate::wire::IpAddress;
     pub use super::*;
 
     pub fn buffer(packets: usize) -> IcmpSocketBuffer<'static, 'static> {
@@ -426,7 +489,7 @@ mod tests_common {
 mod test_ipv4 {
     use super::tests_common::*;
 
-    use wire::Icmpv4DstUnreachable;
+    use crate::wire::Icmpv4DstUnreachable;
 
     const REMOTE_IPV4: Ipv4Address = Ipv4Address([0x7f, 0x00, 0x00, 0x02]);
     const LOCAL_IPV4:  Ipv4Address = Ipv4Address([0x7f, 0x00, 0x00, 0x01]);
@@ -624,7 +687,7 @@ mod test_ipv4 {
 mod test_ipv6 {
     use super::tests_common::*;
 
-    use wire::Icmpv6DstUnreachable;
+    use crate::wire::Icmpv6DstUnreachable;
 
     const REMOTE_IPV6: Ipv6Address = Ipv6Address([0xfe, 0x80, 0, 0, 0, 0, 0, 0,
                                                   0, 0, 0, 0, 0, 0, 0, 1]);

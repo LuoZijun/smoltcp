@@ -2,9 +2,9 @@
 
 use byteorder::{ByteOrder, NetworkEndian};
 
-use {Error, Result};
-use super::{EthernetAddress, Ipv4Address};
-use super::arp::Hardware;
+use crate::{Error, Result};
+use crate::wire::{EthernetAddress, Ipv4Address};
+use crate::wire::arp::Hardware;
 
 const DHCP_MAGIC_NUMBER: u32 = 0x63825363;
 
@@ -135,50 +135,50 @@ impl<'a> DhcpOption<'a> {
 
     pub fn emit<'b>(&self, buffer: &'b mut [u8]) -> &'b mut [u8] {
         let skip_length;
-        match self {
-            &DhcpOption::EndOfList => {
+        match *self {
+            DhcpOption::EndOfList => {
                 skip_length = 1;
                 buffer[0] = field::OPT_END;
             }
-            &DhcpOption::Pad => {
+            DhcpOption::Pad => {
                 skip_length = 1;
                 buffer[0] = field::OPT_PAD;
             }
             _ => {
                 skip_length = self.buffer_len();
                 buffer[1] = (skip_length - 2) as u8;
-                match self {
-                    &DhcpOption::EndOfList | &DhcpOption::Pad => unreachable!(),
-                    &DhcpOption::MessageType(value) => {
+                match *self {
+                    DhcpOption::EndOfList | DhcpOption::Pad => unreachable!(),
+                    DhcpOption::MessageType(value) => {
                         buffer[0] = field::OPT_DHCP_MESSAGE_TYPE;
                         buffer[2] = value.into();
                     }
-                    &DhcpOption::ClientIdentifier(eth_addr) => {
+                    DhcpOption::ClientIdentifier(eth_addr) => {
                         buffer[0] = field::OPT_CLIENT_ID;
                         buffer[2] = u16::from(Hardware::Ethernet) as u8;
                         buffer[3..9].copy_from_slice(eth_addr.as_bytes());
                     }
-                    &DhcpOption::RequestedIp(ip)  => {
+                    DhcpOption::RequestedIp(ip)  => {
                         buffer[0] = field::OPT_REQUESTED_IP;
                         buffer[2..6].copy_from_slice(ip.as_bytes());
                     }
-                    &DhcpOption::ServerIdentifier(ip)  => {
+                    DhcpOption::ServerIdentifier(ip)  => {
                         buffer[0] = field::OPT_SERVER_IDENTIFIER;
                         buffer[2..6].copy_from_slice(ip.as_bytes());
                     }
-                    &DhcpOption::Router(ip)  => {
+                    DhcpOption::Router(ip)  => {
                         buffer[0] = field::OPT_ROUTER;
                         buffer[2..6].copy_from_slice(ip.as_bytes());
                     }
-                    &DhcpOption::SubnetMask(mask)  => {
+                    DhcpOption::SubnetMask(mask)  => {
                         buffer[0] = field::OPT_SUBNET_MASK;
                         buffer[2..6].copy_from_slice(mask.as_bytes());
                     }
-                    &DhcpOption::MaximumDhcpMessageSize(size) => {
+                    DhcpOption::MaximumDhcpMessageSize(size) => {
                         buffer[0] = field::OPT_MAX_DHCP_MESSAGE_SIZE;
                         buffer[2..4].copy_from_slice(&size.to_be_bytes()[..]);
                     }
-                    &DhcpOption::Other { kind, data: provided } => {
+                    DhcpOption::Other { kind, data: provided } => {
                         buffer[0] = kind;
                         buffer[2..skip_length].copy_from_slice(provided);
                     }
@@ -199,7 +199,7 @@ pub(crate) mod field {
     #![allow(non_snake_case)]
     #![allow(unused)]
 
-    use wire::field::*;
+    use crate::wire::field::*;
 
     pub const OP: usize = 0;
     pub const HTYPE: usize = 1;
@@ -727,7 +727,7 @@ impl<'a> Repr<'a> {
         let mut max_size = None;
 
         let mut options = packet.options()?;
-        while options.len() > 0 {
+        while !options.is_empty() {
             let (next_options, option) = DhcpOption::parse(options)?;
             match option {
                 DhcpOption::EndOfList => break,
@@ -759,14 +759,11 @@ impl<'a> Repr<'a> {
                     parameter_request_list = Some(data);
                 }
                 DhcpOption::Other {kind: field::OPT_DOMAIN_NAME_SERVER, data} => {
-                    let mut dns_servers_inner = [None; 3];
-                    for i in 0..3 {
-                        let offset = 4 * i;
-                        let end = offset + 4;
-                        if end > data.len() { break }
-                        dns_servers_inner[i] = Some(Ipv4Address::from_bytes(&data[offset..end]));
+                    let mut servers = [None; 3];
+                    for (server, chunk) in servers.iter_mut().zip(data.chunks(4)) {
+                        *server = Some(Ipv4Address::from_bytes(chunk));
                     }
-                    dns_servers = Some(dns_servers_inner);
+                    dns_servers = Some(servers);
                 }
                 DhcpOption::Other {..} => {}
             }
@@ -836,7 +833,7 @@ impl<'a> Repr<'a> {
 
 #[cfg(test)]
 mod test {
-    use wire::Ipv4Address;
+    use crate::wire::Ipv4Address;
     use super::*;
 
     const MAGIC_COOKIE: u32 = 0x63825363;

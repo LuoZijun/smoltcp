@@ -12,7 +12,7 @@ size for a buffer, allocate it, and let the networking stack use it.
 */
 
 use core::marker::PhantomData;
-use time::Instant;
+use crate::time::Instant;
 
 mod meta;
 #[cfg(feature = "socket-raw")]
@@ -26,7 +26,12 @@ mod tcp;
 mod set;
 mod ref_;
 
+#[cfg(feature = "async")]
+mod waker;
+
 pub(crate) use self::meta::Meta as SocketMeta;
+#[cfg(feature = "async")]
+pub(crate) use self::waker::WakerRegistration;
 
 #[cfg(feature = "socket-raw")]
 pub use self::raw::{RawPacketMetadata,
@@ -69,8 +74,8 @@ pub(crate) enum PollAt {
 impl PollAt {
     #[cfg(feature = "socket-tcp")]
     fn is_ingress(&self) -> bool {
-        match self {
-            &PollAt::Ingress => true,
+        match *self {
+            PollAt::Ingress => true,
             _ => false,
         }
     }

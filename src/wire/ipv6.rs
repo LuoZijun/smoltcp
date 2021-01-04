@@ -3,9 +3,12 @@
 use core::fmt;
 use byteorder::{ByteOrder, NetworkEndian};
 
-use {Error, Result};
+use crate::{Error, Result};
+use crate::wire::ip::pretty_print_ip_payload;
+#[cfg(feature = "proto-ipv4")]
+use crate::wire::ipv4;
+
 pub use super::IpProtocol as Protocol;
-use super::ip::pretty_print_ip_payload;
 
 /// Minimum MTU required of all links supporting IPv6. See [RFC 8200 § 5].
 ///
@@ -44,6 +47,7 @@ impl Address {
                  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]);
 
     /// Construct an IPv6 address from parts.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(a0: u16, a1: u16, a2: u16, a3: u16,
                a4: u16, a5: u16, a6: u16, a7: u16) -> Address {
         let mut addr = [0u8; 16];
@@ -75,9 +79,8 @@ impl Address {
     pub fn from_parts(data: &[u16]) -> Address {
         assert!(data.len() >= 8);
         let mut bytes = [0; 16];
-        for word_idx in 0..8 {
-            let byte_idx = word_idx * 2;
-            NetworkEndian::write_u16(&mut bytes[byte_idx..(byte_idx + 2)], data[word_idx]);
+        for (word_idx, chunk) in bytes.chunks_mut(2).enumerate() {
+            NetworkEndian::write_u16(chunk, data[word_idx]);
         }
         Address(bytes)
     }
@@ -88,9 +91,8 @@ impl Address {
     /// The function panics if `data` is not 8 words long.
     pub fn write_parts(&self, data: &mut [u16]) {
         assert!(data.len() >= 8);
-        for i in 0..8 {
-            let byte_idx = i * 2;
-            data[i] = NetworkEndian::read_u16(&self.0[byte_idx..(byte_idx + 2)]);
+        for (i, chunk) in self.0.chunks(2).enumerate() {
+            data[i] = NetworkEndian::read_u16(chunk);
         }
     }
 
@@ -144,9 +146,9 @@ impl Address {
 
     #[cfg(feature = "proto-ipv4")]
     /// Convert an IPv4 mapped IPv6 address to an IPv4 address.
-    pub fn as_ipv4(&self) -> Option<::wire::ipv4::Address> {
+    pub fn as_ipv4(&self) -> Option<ipv4::Address> {
         if self.is_ipv4_mapped() {
-            Some(::wire::ipv4::Address::new(self.0[12], self.0[13], self.0[14], self.0[15]))
+            Some(ipv4::Address::new(self.0[12], self.0[13], self.0[14], self.0[15]))
         } else {
             None
         }
@@ -254,8 +256,8 @@ impl fmt::Display for Address {
 
 #[cfg(feature = "proto-ipv4")]
 /// Convert the given IPv4 address into a IPv4-mapped IPv6 address
-impl From<::wire::ipv4::Address> for Address {
-    fn from(address: ::wire::ipv4::Address) -> Self {
+impl From<ipv4::Address> for Address {
+    fn from(address: ipv4::Address) -> Self {
         let octets = address.0;
         Address([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff,
                 octets[0], octets[1], octets[2], octets[3]])
@@ -356,7 +358,7 @@ pub struct Packet<T: AsRef<[u8]>> {
 //
 // See https://tools.ietf.org/html/rfc2460#section-3 for details.
 mod field {
-    use wire::field::*;
+    use crate::wire::field::*;
     // 4-bit version number, 8-bit traffic class, and the
     // 20-bit flow label.
     pub const VER_TC_FLOW: Field = 0..4;
@@ -647,7 +649,7 @@ impl fmt::Display for Repr {
     }
 }
 
-use super::pretty_print::{PrettyPrint, PrettyIndent};
+use crate::wire::pretty_print::{PrettyPrint, PrettyIndent};
 
 // TODO: This is very similar to the implementation for IPv4. Make
 // a way to have less copy and pasted code here.
@@ -673,13 +675,13 @@ impl<T: AsRef<[u8]>> PrettyPrint for Packet<T> {
 
 #[cfg(test)]
 mod test {
-    use Error;
+    use crate::Error;
     use super::{Address, Cidr};
     use super::{Packet, Protocol, Repr};
-    use wire::pretty_print::{PrettyPrinter};
+    use crate::wire::pretty_print::{PrettyPrinter};
 
     #[cfg(feature = "proto-ipv4")]
-    use wire::ipv4::Address as Ipv4Address;
+    use crate::wire::ipv4::Address as Ipv4Address;
 
     static LINK_LOCAL_ADDR: Address = Address([0xfe, 0x80, 0x00, 0x00,
                                                0x00, 0x00, 0x00, 0x00,

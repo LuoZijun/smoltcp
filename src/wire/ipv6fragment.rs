@@ -1,5 +1,5 @@
 use core::fmt;
-use {Error, Result};
+use crate::{Error, Result};
 
 use byteorder::{ByteOrder, NetworkEndian};
 
@@ -21,7 +21,7 @@ pub struct Header<T: AsRef<[u8]>> {
 //
 // See https://tools.ietf.org/html/rfc8200#section-4.5 for details.
 mod field {
-    use wire::field::*;
+    use crate::wire::field::*;
 
     // 8-bit identifier of the header immediately following this header.
     pub const NXT_HDR:          usize = 0;
@@ -115,7 +115,7 @@ impl<T: AsRef<[u8]> + AsMut<[u8]>> Header<T> {
         data[field::RESERVED] = 0;
 
         // Retain the higher order 5 bits and lower order 1 bit
-        data[3] = data[3] & 0xf9;
+        data[3] &= 0xf9;
     }
 
     /// Set the fragment offset field.

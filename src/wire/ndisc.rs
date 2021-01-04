@@ -1,12 +1,13 @@
 use byteorder::{ByteOrder, NetworkEndian};
+use bitflags::bitflags;
 
-use {Error, Result};
-use super::icmpv6::{field, Message, Packet};
-use wire::{EthernetAddress, Ipv6Repr, Ipv6Packet};
-use wire::{NdiscOption, NdiscOptionRepr, NdiscOptionType};
-use wire::{NdiscPrefixInformation, NdiscRedirectedHeader};
-use time::Duration;
-use super::Ipv6Address;
+use crate::{Error, Result};
+use crate::wire::icmpv6::{field, Message, Packet};
+use crate::wire::{EthernetAddress, Ipv6Repr, Ipv6Packet};
+use crate::wire::{NdiscOption, NdiscOptionRepr, NdiscOptionType};
+use crate::wire::{NdiscPrefixInformation, NdiscRedirectedHeader};
+use crate::time::Duration;
+use crate::wire::Ipv6Address;
 
 bitflags! {
     pub struct RouterFlags: u8 {
@@ -227,7 +228,7 @@ impl<'a> Repr<'a> {
                 where T: AsRef<[u8]> + ?Sized {
         match packet.msg_type() {
             Message::RouterSolicit => {
-                let lladdr = if packet.payload().len() > 0 {
+                let lladdr = if !packet.payload().is_empty() {
                     let opt = NdiscOption::new_checked(packet.payload())?;
                     match opt.option_type() {
                         NdiscOptionType::SourceLinkLayerAddr => Some(opt.link_layer_addr()),
@@ -262,7 +263,7 @@ impl<'a> Repr<'a> {
                 })
             },
             Message::NeighborSolicit => {
-                let lladdr = if packet.payload().len() > 0 {
+                let lladdr = if !packet.payload().is_empty() {
                     let opt = NdiscOption::new_checked(packet.payload())?;
                     match opt.option_type() {
                         NdiscOptionType::SourceLinkLayerAddr => Some(opt.link_layer_addr()),
@@ -276,7 +277,7 @@ impl<'a> Repr<'a> {
                 })
             },
             Message::NeighborAdvert => {
-                let lladdr = if packet.payload().len() > 0 {
+                let lladdr = if !packet.payload().is_empty() {
                     let opt = NdiscOption::new_checked(packet.payload())?;
                     match opt.option_type() {
                         NdiscOptionType::TargetLinkLayerAddr => Some(opt.link_layer_addr()),
@@ -370,8 +371,8 @@ impl<'a> Repr<'a> {
 
     pub fn emit<T>(&self, packet: &mut Packet<&mut T>)
             where T: AsRef<[u8]> + AsMut<[u8]> + ?Sized {
-        match self {
-            &Repr::RouterSolicit { lladdr } => {
+        match *self {
+            Repr::RouterSolicit { lladdr } => {
                 packet.set_msg_type(Message::RouterSolicit);
                 packet.set_msg_code(0);
                 packet.clear_reserved();
@@ -381,7 +382,7 @@ impl<'a> Repr<'a> {
                 }
             },
 
-            &Repr::RouterAdvert { hop_limit, flags, router_lifetime, reachable_time,
+            Repr::RouterAdvert { hop_limit, flags, router_lifetime, reachable_time,
                                   retrans_time, lladdr, mtu, prefix_info } => {
                 packet.set_msg_type(Message::RouterAdvert);
                 packet.set_msg_code(0);
@@ -410,7 +411,7 @@ impl<'a> Repr<'a> {
                 }
             },
 
-            &Repr::NeighborSolicit { target_addr, lladdr } => {
+            Repr::NeighborSolicit { target_addr, lladdr } => {
                 packet.set_msg_type(Message::NeighborSolicit);
                 packet.set_msg_code(0);
                 packet.clear_reserved();
@@ -422,7 +423,7 @@ impl<'a> Repr<'a> {
                 }
             },
 
-            &Repr::NeighborAdvert { flags, target_addr, lladdr } => {
+            Repr::NeighborAdvert { flags, target_addr, lladdr } => {
                 packet.set_msg_type(Message::NeighborAdvert);
                 packet.set_msg_code(0);
                 packet.clear_reserved();
@@ -435,7 +436,7 @@ impl<'a> Repr<'a> {
                 }
             },
 
-            &Repr::Redirect { target_addr, dest_addr, lladdr, redirected_hdr } => {
+            Repr::Redirect { target_addr, dest_addr, lladdr, redirected_hdr } => {
                 packet.set_msg_type(Message::Redirect);
                 packet.set_msg_code(0);
                 packet.clear_reserved();
@@ -462,10 +463,10 @@ impl<'a> Repr<'a> {
 
 #[cfg(test)]
 mod test {
-    use phy::ChecksumCapabilities;
+    use crate::phy::ChecksumCapabilities;
     use super::*;
-    use wire::Icmpv6Repr;
-    use wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2};
+    use crate::wire::Icmpv6Repr;
+    use crate::wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2};
 
     static ROUTER_ADVERT_BYTES: [u8; 24] =
         [0x86, 0x00, 0xa9, 0xde,

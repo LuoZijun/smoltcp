@@ -1,10 +1,10 @@
 use core::{i32, ops, cmp, fmt};
 use byteorder::{ByteOrder, NetworkEndian};
 
-use {Error, Result};
-use phy::ChecksumCapabilities;
-use super::{IpProtocol, IpAddress};
-use super::ip::checksum;
+use crate::{Error, Result};
+use crate::phy::ChecksumCapabilities;
+use crate::wire::{IpProtocol, IpAddress};
+use crate::wire::ip::checksum;
 
 /// A TCP sequence number.
 ///
@@ -74,7 +74,7 @@ pub struct Packet<T: AsRef<[u8]>> {
 mod field {
     #![allow(non_snake_case)]
 
-    use wire::field::*;
+    use crate::wire::field::*;
 
     pub const SRC_PORT: Field = 0..2;
     pub const DST_PORT: Field = 2..4;
@@ -294,13 +294,10 @@ impl<T: AsRef<[u8]>> Packet<T> {
     pub fn selective_ack_permitted(&self) -> Result<bool> {
         let data = self.buffer.as_ref();
         let mut options = &data[field::OPTIONS(self.header_len())];
-        while options.len() > 0 {
+        while !options.is_empty() {
             let (next_options, option) = TcpOption::parse(options)?;
-            match option {
-                TcpOption::SackPermitted => {
-                    return Ok(true);
-                },
-                _ => {},
+            if option == TcpOption::SackPermitted {
+                return Ok(true);
             }
             options = next_options;
         }
@@ -310,18 +307,13 @@ impl<T: AsRef<[u8]>> Packet<T> {
     /// Return the selective acknowledgement ranges, if any. If there are none in the packet, an
     /// array of ``None`` values will be returned.
     ///
-    pub fn selective_ack_ranges<'s>(
-        &'s self
-    ) -> Result<[Option<(u32, u32)>; 3]> {
+    pub fn selective_ack_ranges(&self) -> Result<[Option<(u32, u32)>; 3]> {
         let data = self.buffer.as_ref();
         let mut options = &data[field::OPTIONS(self.header_len())];
-        while options.len() > 0 {
+        while !options.is_empty() {
             let (next_options, option) = TcpOption::parse(options)?;
-            match option {
-                TcpOption::SackRange(slice) => {
-                    return Ok(slice);
-                },
-                _ => {},
+            if let TcpOption::SackRange(slice) = option {
+                return Ok(slice);
             }
             options = next_options;
         }
@@ -637,7 +629,7 @@ impl<'a> TcpOption<'a> {
                         option = TcpOption::SackRange(sack_ranges);
                     },
                     (_, _) =>
-                        option = TcpOption::Unknown { kind: kind, data: data }
+                        option = TcpOption::Unknown { kind, data }
                 }
             }
         }
@@ -645,28 +637,28 @@ impl<'a> TcpOption<'a> {
     }
 
     pub fn buffer_len(&self) -> usize {
-        match self {
-            &TcpOption::EndOfList => 1,
-            &TcpOption::NoOperation => 1,
-            &TcpOption::MaxSegmentSize(_) => 4,
-            &TcpOption::WindowScale(_) => 3,
-            &TcpOption::SackPermitted => 2,
-            &TcpOption::SackRange(s) => s.iter().filter(|s| s.is_some()).count() * 8 + 2,
-            &TcpOption::Unknown { data, .. } => 2 + data.len()
+        match *self {
+            TcpOption::EndOfList => 1,
+            TcpOption::NoOperation => 1,
+            TcpOption::MaxSegmentSize(_) => 4,
+            TcpOption::WindowScale(_) => 3,
+            TcpOption::SackPermitted => 2,
+            TcpOption::SackRange(s) => s.iter().filter(|s| s.is_some()).count() * 8 + 2,
+            TcpOption::Unknown { data, .. } => 2 + data.len()
         }
     }
 
     pub fn emit<'b>(&self, buffer: &'b mut [u8]) -> &'b mut [u8] {
         let length;
-        match self {
-            &TcpOption::EndOfList => {
+        match *self {
+            TcpOption::EndOfList => {
                 length    = 1;
                 // There may be padding space which also should be initialized.
                 for p in buffer.iter_mut() {
                     *p = field::OPT_END;
                 }
             }
-            &TcpOption::NoOperation => {
+            TcpOption::NoOperation => {
                 length    = 1;
                 buffer[0] = field::OPT_NOP;
             }
@@ -718,6 +710,7 @@ pub enum Control {
     Rst
 }
 
+#[allow(clippy::len_without_is_empty)]
 impl Control {
     /// Return the length of a control flag, in terms of sequence space.
     pub fn len(self) -> usize {
@@ -789,7 +782,7 @@ impl<'a> Repr<'a> {
         let mut options = packet.options();
         let mut sack_permitted = false;
         let mut sack_ranges = [None, None, None];
-        while options.len() > 0 {
+        while !options.is_empty() {
             let (next_options, option) = TcpOption::parse(options)?;
             match option {
                 TcpOption::EndOfList => break,
@@ -905,7 +898,7 @@ impl<'a> Repr<'a> {
                 let tmp = options; options = TcpOption::SackRange(self.sack_ranges).emit(tmp);
             }
 
-            if options.len() > 0 {
+            if !options.is_empty() {
                 TcpOption::EndOfList.emit(options);
             }
         }
@@ -929,7 +922,7 @@ impl<'a> Repr<'a> {
     /// Return whether the segment has no flags set (except PSH) and no data.
     pub fn is_empty(&self) -> bool {
         match self.control {
-            _ if self.payload.len() != 0 => false,
+            _ if !self.payload.is_empty() => false,
             Control::Syn  | Control::Fin | Control::Rst => false,
             Control::None | Control::Psh => true
         }
@@ -959,7 +952,7 @@ impl<'a, T: AsRef<[u8]> + ?Sized> fmt::Display for Packet<&'a T> {
         write!(f, " len={}", self.payload().len())?;
 
         let mut options = self.options();
-        while options.len() > 0 {
+        while !options.is_empty() {
             let (next_options, option) =
                 match TcpOption::parse(options) {
                     Ok(res) => res,
@@ -1009,7 +1002,7 @@ impl<'a> fmt::Display for Repr<'a> {
     }
 }
 
-use super::pretty_print::{PrettyPrint, PrettyIndent};
+use crate::wire::pretty_print::{PrettyPrint, PrettyIndent};
 
 impl<T: AsRef<[u8]>> PrettyPrint for Packet<T> {
     fn pretty_print(buffer: &dyn AsRef<[u8]>, f: &mut fmt::Formatter,
@@ -1024,7 +1017,7 @@ impl<T: AsRef<[u8]>> PrettyPrint for Packet<T> {
 #[cfg(test)]
 mod test {
     #[cfg(feature = "proto-ipv4")]
-    use wire::Ipv4Address;
+    use crate::wire::Ipv4Address;
     use super::*;
 
     #[cfg(feature = "proto-ipv4")]

@@ -1,9 +1,13 @@
 use core::cmp::min;
+#[cfg(feature = "async")]
+use core::task::Waker;
 
-use {Error, Result};
-use socket::{Socket, SocketMeta, SocketHandle, PollAt};
-use storage::{PacketBuffer, PacketMetadata};
-use wire::{IpProtocol, IpRepr, IpEndpoint, UdpRepr};
+use crate::{Error, Result};
+use crate::socket::{Socket, SocketMeta, SocketHandle, PollAt};
+use crate::storage::{PacketBuffer, PacketMetadata};
+use crate::wire::{IpProtocol, IpRepr, IpEndpoint, UdpRepr};
+#[cfg(feature = "async")]
+use crate::socket::WakerRegistration;
 
 /// A UDP packet metadata.
 pub type UdpPacketMetadata = PacketMetadata<IpEndpoint>;
@@ -22,7 +26,11 @@ pub struct UdpSocket<'a, 'b: 'a> {
     rx_buffer: UdpSocketBuffer<'a, 'b>,
     tx_buffer: UdpSocketBuffer<'a, 'b>,
     /// The time-to-live (IPv4) or hop limit (IPv6) value used in outgoing packets.
-    hop_limit: Option<u8>
+    hop_limit: Option<u8>,
+    #[cfg(feature = "async")]
+    rx_waker: WakerRegistration,
+    #[cfg(feature = "async")]
+    tx_waker: WakerRegistration,
 }
 
 impl<'a, 'b> UdpSocket<'a, 'b> {
@@ -34,8 +42,47 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
             endpoint:  IpEndpoint::default(),
             rx_buffer: rx_buffer,
             tx_buffer: tx_buffer,
-            hop_limit: None
+            hop_limit: None,
+            #[cfg(feature = "async")]
+            rx_waker: WakerRegistration::new(),
+            #[cfg(feature = "async")]
+            tx_waker: WakerRegistration::new(),
         }
+    }
+
+    /// Register a waker for receive operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `recv` method calls, such as receiving data, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `recv` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_recv_waker(&mut self, waker: &Waker) {
+        self.rx_waker.register(waker)
+    }
+
+    /// Register a waker for send operations.
+    ///
+    /// The waker is woken on state changes that might affect the return value
+    /// of `send` method calls, such as space becoming available in the transmit
+    /// buffer, or the socket closing.
+    /// 
+    /// Notes:
+    ///
+    /// - Only one waker can be registered at a time. If another waker was previously registered,
+    ///   it is overwritten and will no longer be woken.
+    /// - The Waker is woken only once. Once woken, you must register it again to receive more wakes. 
+    /// - "Spurious wakes" are allowed: a wake doesn't guarantee the result of `send` has
+    ///   necessarily changed.
+    #[cfg(feature = "async")]
+    pub fn register_send_waker(&mut self, waker: &Waker) {
+        self.tx_waker.register(waker)
     }
 
     /// Return the socket handle.
@@ -89,6 +136,13 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
         if self.is_open() { return Err(Error::Illegal) }
 
         self.endpoint = endpoint;
+
+        #[cfg(feature = "async")]
+        {
+            self.rx_waker.wake();
+            self.tx_waker.wake();
+        }
+
         Ok(())
     }
 
@@ -234,6 +288,10 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
         net_trace!("{}:{}:{}: receiving {} octets",
                    self.meta.handle, self.endpoint,
                    endpoint, size);
+
+        #[cfg(feature = "async")]
+        self.rx_waker.wake();
+
         Ok(())
     }
 
@@ -261,7 +319,12 @@ impl<'a, 'b> UdpSocket<'a, 'b> {
                 hop_limit:   hop_limit,
             };
             emit((ip_repr, repr))
-        })
+        })?;
+
+        #[cfg(feature = "async")]
+        self.tx_waker.wake();
+
+        Ok(())
     }
 
     pub(crate) fn poll_at(&self) -> PollAt {
@@ -281,12 +344,12 @@ impl<'a, 'b> Into<Socket<'a, 'b>> for UdpSocket<'a, 'b> {
 
 #[cfg(test)]
 mod test {
-    use wire::{IpAddress, IpRepr, UdpRepr};
+    use crate::wire::{IpAddress, IpRepr, UdpRepr};
     #[cfg(feature = "proto-ipv4")]
-    use wire::Ipv4Repr;
+    use crate::wire::Ipv4Repr;
     #[cfg(feature = "proto-ipv6")]
-    use wire::Ipv6Repr;
-    use wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3};
+    use crate::wire::Ipv6Repr;
+    use crate::wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3};
     use super::*;
 
     fn buffer(packets: usize) -> UdpSocketBuffer<'static, 'static> {

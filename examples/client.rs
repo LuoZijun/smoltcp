@@ -1,14 +1,10 @@
-#[macro_use]
-extern crate log;
-extern crate env_logger;
-extern crate getopts;
-extern crate smoltcp;
-
 mod utils;
 
 use std::str::{self, FromStr};
 use std::collections::BTreeMap;
 use std::os::unix::io::AsRawFd;
+use log::debug;
+
 use smoltcp::phy::wait as phy_wait;
 use smoltcp::wire::{EthernetAddress, Ipv4Address, IpAddress, IpCidr};
 use smoltcp::iface::{NeighborCache, EthernetInterfaceBuilder, Routes};
@@ -81,7 +77,7 @@ fn main() {
             if socket.may_recv() {
                 let data = socket.recv(|data| {
                     let mut data = data.to_owned();
-                    if data.len() > 0 {
+                    if !data.is_empty() {
                         debug!("recv data: {:?}",
                                str::from_utf8(data.as_ref()).unwrap_or("(invalid utf8)"));
                         data = data.split(|&b| b == b'\n').collect::<Vec<_>>().concat();
@@ -90,7 +86,7 @@ fn main() {
                     }
                     (data.len(), data)
                 }).unwrap();
-                if socket.can_send() && data.len() > 0 {
+                if socket.can_send() && !data.is_empty() {
                     debug!("send data: {:?}",
                            str::from_utf8(data.as_ref()).unwrap_or("(invalid utf8)"));
                     socket.send_slice(&data[..]).unwrap();

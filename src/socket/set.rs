@@ -1,9 +1,9 @@
 use core::{fmt, slice};
 use managed::ManagedSlice;
 
-use super::{Socket, SocketRef, AnySocket};
+use crate::socket::{Socket, SocketRef, AnySocket};
 #[cfg(feature = "socket-tcp")]
-use super::TcpState;
+use crate::socket::TcpState;
 
 /// An item of a socket set.
 ///
@@ -38,9 +38,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     pub fn new<SocketsT>(sockets: SocketsT) -> Set<'a, 'b, 'c>
             where SocketsT: Into<ManagedSlice<'a, Option<Item<'b, 'c>>>> {
         let sockets = sockets.into();
-        Set {
-            sockets: sockets
-        }
+        Set { sockets }
     }
 
     /// Add a socket to the set with the reference count 1, and return its handle.
@@ -55,7 +53,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
             net_trace!("[{}]: adding", index);
             let handle = Handle(index);
             socket.meta_mut().handle = handle;
-            *slot = Some(Item { socket: socket, refs: 1 });
+            *slot = Some(Item { socket, refs: 1 });
             handle
         }
 
@@ -75,7 +73,7 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
             ManagedSlice::Owned(ref mut sockets) => {
                 sockets.push(None);
                 let index = sockets.len() - 1;
-                return put(index, &mut sockets[index], socket)
+                put(index, &mut sockets[index], socket)
             }
         }
     }
@@ -139,25 +137,25 @@ impl<'a, 'b: 'a, 'c: 'a + 'b> Set<'a, 'b, 'c> {
     pub fn prune(&mut self) {
         for (index, item) in self.sockets.iter_mut().enumerate() {
             let mut may_remove = false;
-            if let &mut Some(Item { refs: 0, ref mut socket }) = item {
-                match socket {
+            if let Some(Item { refs: 0, ref mut socket }) = *item {
+                match *socket {
                     #[cfg(feature = "socket-raw")]
-                    &mut Socket::Raw(_) =>
+                    Socket::Raw(_) =>
                         may_remove = true,
                     #[cfg(all(feature = "socket-icmp", any(feature = "proto-ipv4", feature = "proto-ipv6")))]
-                    &mut Socket::Icmp(_) =>
+                    Socket::Icmp(_) =>
                         may_remove = true,
                     #[cfg(feature = "socket-udp")]
-                    &mut Socket::Udp(_) =>
+                    Socket::Udp(_) =>
                         may_remove = true,
                     #[cfg(feature = "socket-tcp")]
-                    &mut Socket::Tcp(ref mut socket) =>
+                    Socket::Tcp(ref mut socket) =>
                         if socket.state() == TcpState::Closed {
                             may_remove = true
                         } else {
                             socket.close()
                         },
-                    &mut Socket::__Nonexhaustive(_) => unreachable!()
+                    Socket::__Nonexhaustive(_) => unreachable!()
                 }
             }
             if may_remove {

@@ -3,8 +3,8 @@
 
 use managed::ManagedMap;
 
-use wire::{EthernetAddress, IpAddress};
-use time::{Duration, Instant};
+use crate::wire::{EthernetAddress, IpAddress};
+use crate::time::{Duration, Instant};
 
 /// A cached neighbor.
 ///
@@ -106,7 +106,7 @@ impl<'a> Cache<'a> {
             #[cfg(any(feature = "std", feature = "alloc"))]
             ManagedMap::Owned(ref mut map) => {
                 if current_storage_size >= self.gc_threshold {
-                    let new_btree_map = map.into_iter()
+                    let new_btree_map = map.iter_mut()
                         .map(|(key, value)| (*key, *value))
                         .filter(|(_, v)| timestamp < v.expires_at)
                         .collect();
@@ -169,13 +169,11 @@ impl<'a> Cache<'a> {
             return Answer::Found(EthernetAddress::BROADCAST);
         }
 
-        match self.storage.get(protocol_addr) {
-            Some(&Neighbor { expires_at, hardware_addr }) => {
-                if timestamp < expires_at {
-                    return Answer::Found(hardware_addr)
-                }
+        if let Some(&Neighbor { expires_at, hardware_addr }) =
+                self.storage.get(protocol_addr) {
+            if timestamp < expires_at {
+                return Answer::Found(hardware_addr)
             }
-            None => ()
         }
 
         if timestamp < self.silent_until {
@@ -194,7 +192,7 @@ impl<'a> Cache<'a> {
 mod test {
     use super::*;
     use std::collections::BTreeMap;
-    use wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3, MOCK_IP_ADDR_4};
+    use crate::wire::ip::test::{MOCK_IP_ADDR_1, MOCK_IP_ADDR_2, MOCK_IP_ADDR_3, MOCK_IP_ADDR_4};
 
 
     const HADDR_A: EthernetAddress = EthernetAddress([0, 0, 0, 0, 0, 1]);

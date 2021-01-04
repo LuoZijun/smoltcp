@@ -9,9 +9,9 @@ use alloc::collections::VecDeque;
 #[cfg(all(feature = "alloc", feature = "rust-1_28"))]
 use alloc::VecDeque;
 
-use Result;
-use phy::{self, Device, DeviceCapabilities};
-use time::Instant;
+use crate::Result;
+use crate::phy::{self, Device, DeviceCapabilities};
+use crate::time::Instant;
 
 /// A loopback device.
 #[derive(Debug)]
@@ -19,6 +19,7 @@ pub struct Loopback {
     queue: VecDeque<Vec<u8>>,
 }
 
+#[allow(clippy::new_without_default)]
 impl Loopback {
     /// Creates a loopback device.
     ///
@@ -44,7 +45,7 @@ impl<'a> Device<'a> for Loopback {
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
         self.queue.pop_front().map(move |buffer| {
-            let rx = RxToken { buffer: buffer };
+            let rx = RxToken { buffer };
             let tx = TxToken { queue: &mut self.queue };
             (rx, tx)
         })

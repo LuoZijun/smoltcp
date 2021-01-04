@@ -1,7 +1,7 @@
 use core::fmt;
 use byteorder::{ByteOrder, NetworkEndian};
 
-use {Error, Result};
+use crate::{Error, Result};
 
 enum_with_unknown! {
     /// Ethernet protocol type.
@@ -14,11 +14,11 @@ enum_with_unknown! {
 
 impl fmt::Display for EtherType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            &EtherType::Ipv4 => write!(f, "IPv4"),
-            &EtherType::Ipv6 => write!(f, "IPv6"),
-            &EtherType::Arp  => write!(f, "ARP"),
-            &EtherType::Unknown(id) => write!(f, "0x{:04x}", id)
+        match *self {
+            EtherType::Ipv4 => write!(f, "IPv4"),
+            EtherType::Ipv6 => write!(f, "IPv6"),
+            EtherType::Arp  => write!(f, "ARP"),
+            EtherType::Unknown(id) => write!(f, "0x{:04x}", id)
         }
     }
 }
@@ -83,7 +83,7 @@ pub struct Frame<T: AsRef<[u8]>> {
 }
 
 mod field {
-    use wire::field::*;
+    use crate::wire::field::*;
 
     pub const DESTINATION: Field =  0..6;
     pub const SOURCE:      Field =  6..12;
@@ -209,7 +209,7 @@ impl<T: AsRef<[u8]>> fmt::Display for Frame<T> {
     }
 }
 
-use super::pretty_print::{PrettyPrint, PrettyIndent};
+use crate::wire::pretty_print::{PrettyPrint, PrettyIndent};
 
 impl<T: AsRef<[u8]>> PrettyPrint for Frame<T> {
     fn pretty_print(buffer: &dyn AsRef<[u8]>, f: &mut fmt::Formatter,
